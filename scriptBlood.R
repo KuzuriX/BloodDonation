@@ -10,6 +10,9 @@ library(MVN)
 library(caret)
 library(corrplot)
 library(LiblineaR)
+library(RWeka)
+library(rpart.plot)
+library(randomForest)
 
 path = rstudioapi::getActiveDocumentContext()$path
 path = sub(basename(path), '', path)
@@ -126,7 +129,7 @@ aq<- aq.plot(trainTransformed[-4])
 outliers<- c(1,9,387,389,264,398,388,93,5,391,524,4,517,516,189,573)
 
 # Calculate Mahalanobis with predictor variables
-df2 <- trainTransformed[, -4]    # Remove SalePrice Variable
+df2 <- bloodTrain[, -4]    
 m_dist <- mahalanobis(df2, colMeans(df2), cov(df2))
 df2$MD <- round(m_dist, 1)
 
@@ -184,17 +187,28 @@ Y2<- testTransformed$MadeDonation
 
 polynomial <- function(X, p){
   new_data=c()
+  temp1 <- X
+  temp2 <- cbind(X^2, do.call(cbind,combn(colnames(X), 2, 
+                FUN= function(x) list(X[x[1]]*X[x[2]]))))
+  colnames(temp2)[-(seq_len(ncol(X)))] <-  combn(colnames(X), 2, 
+                                                 FUN = paste, collapse=":")
+  new_data <- cbind(temp1,  temp2[, !names(temp2) %in% names(X)])
   
-  for(i in 1:p){
-      temp= X^i
-      new_data=cbind(new_data,temp)
+  for(i in 2:p){
+      temp1= as.data.frame(X^p)
+      colnames(temp1)<-paste0(colnames(temp1), paste0("^",i))
+      temp2 <- cbind(temp1^2, do.call(cbind,combn(colnames(temp1), 2, 
+                FUN= function(x) list(temp1[x[1]]*temp1[x[2]]))))
+      colnames(temp2)[-(seq_len(ncol(temp1)))] <-  combn(colnames(temp1), 2, 
+                                                     FUN = paste, collapse=":")
+      new_data=cbind(new_data,temp1, temp2[, !names(temp2) %in% names(temp1)])
   }
   
-  colnames(new_data)=paste0("V",1:ncol(new_data))
+  #colnames(new_data)=paste0("V",1:ncol(new_data))
   return(as.data.frame(new_data))
 }
 
-for (i in 1:8){
+for (i in 2:8){
   #X <- as.data.frame(do.call(poly, c(lapply(1:(ncol(X)), function(x) X[,x]), degree=i, raw=T)))
   #X2 <- as.data.frame(do.call(poly, c(lapply(1:(ncol(X2)), function(x) X2[,x]), degree=i, raw=T)))
   
@@ -216,19 +230,19 @@ for (i in 1:8){
 
 plot(acurracy)
 
-## 2 polynomial has the best accuracy
+## 3 polynomial has the best accuracy
 
 X<- trainTransformed[,1:3]
 X2<- testTransformed[,1:3]
 
-X = polynomial(X,2)
-X2 = polynomial(X2,2)
+X = polynomial(X,3)
+X2 = polynomial(X2,3)
 
-colnames(X)<-c("MonthsLastDonation","NoDonations","MonthsFirstDonation",
-               "MonthsLastDonation2","NoDonations2","MonthsFirstDonation2")
+#colnames(X)<-c("MonthsLastDonation","NoDonations","MonthsFirstDonation",
+#               "MonthsLastDonation2","NoDonations2","MonthsFirstDonation2")
 
-colnames(X2)<-c("MonthsLastDonation","NoDonations","MonthsFirstDonation",
-               "MonthsLastDonation2","NoDonations2","MonthsFirstDonation2")
+#colnames(X2)<-c("MonthsLastDonation","NoDonations","MonthsFirstDonation",
+#               "MonthsLastDonation2","NoDonations2","MonthsFirstDonation2")
 
 
 ##################################################
@@ -259,6 +273,52 @@ cat("Best model type is:",bestType,"\n")
 cat("Best cost is:",bestCost,"\n")
 cat("Best accuracy is:",bestAcc,"\n")
 
+## Best model type is: 6 
+## Best cost is: 1 
+## Best accuracy is: 0.8008949
+bestCost=1
+bestType=6
+
+
+modLin=LiblineaR(data=X,target=Y,type=bestType,cost=bestCost,bias=1,verbose=FALSE)
+
+pr=FALSE
+if(bestType==0 || bestType==7) pr=TRUE
+
+p=predict(modLin,X2,proba=pr,decisionValues=TRUE)
+
+res=table(p$predictions,Y2)
+print(res)
+
+confusionMatrix(data = p$predictions, reference = Y2, positive = '1')$overall[1]
+
+###########################
+# DECISION TREES
+########################
+
+fitControl <- trainControl(method = "cv", number = 2)
+
+rpartFit <- train(as.character(MadeDonation) ~., data=bloodTrain, method = "rpart", trControl = fitControl)
+
+probsTest <- predict(rpartFit, bloodTest, type = "prob")
+pred      <- factor( ifelse(probsTest[, "1"] > 0.5, "1", "0") )
+confusionMatrix(pred, bloodTest$MadeDonation)
+
+rpart.plot(rpartFit$finalModel)
+
+#########################
+# DECISION TREES
+#####################
+
+bloodTrain$MadeDonation<-as.character(bloodTrain$MadeDonation)
+blood$MadeDonation<-as.character(blood$MadeDonation)
+
+blood.rf=randomForest(MadeDonation ~ . , data = bloodTrain)
+blood.rf
+
+plot(blood.rf)
+
+
 
 
 library(RWeka)
@@ -269,7 +329,7 @@ set.seed(123)
 train_ind <- sample(seq_len(nrow(blood)), size = smp_size)  
 train <- blood[train_ind, ] 
 test <- blood[-train_ind, ]
-fit <- J48(MadeDonation~MonthsLastDonation+NoDonations+MonthsFirstDonation, data=train)
+fit <- J48(MadeDonation~MonthsLastDonation+NoDonations+MonthsFirstDonation, data=trainTransformed)
 summary(fit)
 
 library(partykit)
