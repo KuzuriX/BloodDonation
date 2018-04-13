@@ -13,6 +13,8 @@ library(LiblineaR)
 library(RWeka)
 library(rpart.plot)
 library(randomForest)
+library(e1071)
+library(class)
 
 path = rstudioapi::getActiveDocumentContext()$path
 path = sub(basename(path), '', path)
@@ -29,6 +31,11 @@ blood = blood[,-1]
 names(blood) = c("MonthsLastDonation", "NoDonations", "TotalVolume", "MonthsFirstDonation", "MadeDonation")
 ## Remove the variable TotalVolume since the volume is the number of donations * 250cc
 blood = blood[,-3]
+
+lblood<- blood
+lblood[,1:3]<- log1p(lblood[,1:3]) 
+
+blood <- lblood
 
 ##########
 #PLOTS
@@ -179,6 +186,11 @@ preds<- ifelse(predict(glm1, newdata = testTransformed)>.5,1,0)
 
 confusionMatrix(data = preds, reference = testTransformed$MadeDonation, positive = '1')$overall[1]
 
+a <- confusionMatrix(data = preds, reference = testTransformed$MadeDonation, positive = '1')
+
+confMatrices <- list()
+confMatrices[['Logistic Regression']] <- confusionMatrix(data = preds, reference = testTransformed$MadeDonation, positive = '1')
+
 acurracy <- numeric(8)
 Y <- trainTransformed$MadeDonation
 X<- trainTransformed[,1:3]
@@ -244,9 +256,25 @@ X2 = polynomial(X2,3)
 #colnames(X2)<-c("MonthsLastDonation","NoDonations","MonthsFirstDonation",
 #               "MonthsLastDonation2","NoDonations2","MonthsFirstDonation2")
 
+blood3<-X
+blood3$MadeDonation <- Y
+
+glm2 = glm(MadeDonation~., family=binomial(link=logit), data = blood3)
+summary(glm2)
+
+pR2(glm2)
+
+preds<- ifelse(predict(glm2, newdata = X2)>.5,1,0)
+
+
+confusionMatrix(data = preds, reference = testTransformed$MadeDonation, positive = '1')$overall[1]
+
+confMatrices[['Logistic Reg Cudratic']] <- confusionMatrix(data = preds, reference = testTransformed$MadeDonation, positive = '1')
+
+
 
 ##################################################
-# REGULARIZED LOGISTIC REGRESSION WITH 2 POLYNOMIAL
+# REGULARIZED LOGISTIC REGRESSION WITH 3 POLYNOMIAL
 ###################################################
 
 
@@ -273,11 +301,11 @@ cat("Best model type is:",bestType,"\n")
 cat("Best cost is:",bestCost,"\n")
 cat("Best accuracy is:",bestAcc,"\n")
 
-## Best model type is: 6 
-## Best cost is: 1 
+## Best model type is: 2 
+## Best cost is: 1000 
 ## Best accuracy is: 0.8008949
-bestCost=1
-bestType=6
+bestCost=1000
+bestType=2
 
 
 modLin=LiblineaR(data=X,target=Y,type=bestType,cost=bestCost,bias=1,verbose=FALSE)
@@ -292,6 +320,9 @@ print(res)
 
 confusionMatrix(data = p$predictions, reference = Y2, positive = '1')$overall[1]
 
+confMatrices[['Regularized Logistic Reg']] <- confusionMatrix(data = p$predictions, reference = Y2, positive = '1')
+
+confMatrices
 ###########################
 # DECISION TREES
 ########################
@@ -302,23 +333,117 @@ rpartFit <- train(as.character(MadeDonation) ~., data=bloodTrain, method = "rpar
 
 probsTest <- predict(rpartFit, bloodTest, type = "prob")
 pred      <- factor( ifelse(probsTest[, "1"] > 0.5, "1", "0") )
-confusionMatrix(pred, bloodTest$MadeDonation)
+confusionMatrix(pred, bloodTest$MadeDonation)$overall[1]
 
 rpart.plot(rpartFit$finalModel)
 
-#########################
-# DECISION TREES
+confMatrices[['Decision Trees']] <- confusionMatrix(pred, bloodTest$MadeDonation, positive = '1')
+
+confMatrices
+
+#####################
+# RANDOM FOREST
 #####################
 
-bloodTrain$MadeDonation<-as.character(bloodTrain$MadeDonation)
-blood$MadeDonation<-as.character(blood$MadeDonation)
+bloodTrain$MadeDonation<-factor(bloodTrain$MadeDonation)
+blood$MadeDonation<-factor(blood$MadeDonation)
 
-blood.rf=randomForest(MadeDonation ~ . , data = bloodTrain)
+lblood$MadeDonation<-factor(lblood$MadeDonation)
+
+blood.rf=randomForest(MadeDonation ~ . , data = lblood, subset = trainIndex)
 blood.rf
 
 plot(blood.rf)
 
+print(importance(blood.rf,type = 2)) 
 
+
+probsTest <- predict(blood.rf, bloodTest, type = "prob")
+pred      <- factor( ifelse(probsTest[, "1"] > 0.5, "1", "0") )
+confusionMatrix(pred, bloodTest$MadeDonation)$overall[1]
+
+rpart.plot(rpartFit$finalModel)
+
+confMatrices[['Random Forest']] <- confusionMatrix(pred, bloodTest$MadeDonation, positive = '1')
+
+confMatrices
+
+##########################
+# SUPPORT VECTOR MACHINES
+##########################
+
+
+model_svm <- svm(MadeDonation ~ . , bloodTrain)
+
+pred <- predict(model_svm, bloodTest)
+
+confusionMatrix(pred, bloodTest$MadeDonation)$overall[1]
+
+confMatrices[['SVM']] <- confusionMatrix(pred, bloodTest$MadeDonation, positive = '1')
+
+confMatrices
+
+### Tuned SVM
+
+# perform a grid search
+svm_tune <- tune(svm, MadeDonation ~ ., data = bloodTrain,
+                 ranges = list(epsilon = seq(0,1,0.01), cost = 2^(2:9))
+)
+print(svm_tune)
+
+best_mod <- svm_tune$best.model
+best_mod_pred <- predict(best_mod, bloodTest) 
+
+confMatrices[['SVM (Tuned)']] <- confusionMatrix(best_mod_pred, bloodTest$MadeDonation, positive = '1')
+
+confMatrices
+
+
+##########################
+# NAIVE BAYES
+##########################
+
+
+# Fitting model
+bayesMod <-naiveBayes(MadeDonation ~ ., data = bloodTrain)
+summary(bayesMod)
+#Predict Output 
+pred= predict(bayesMod,bloodTest)
+
+confMatrices[['Naive Bayes']] <- confusionMatrix(pred, bloodTest$MadeDonation, positive = '1')
+
+confMatrices
+
+
+##########################
+# k- Nearest Neighbors
+##########################
+
+# Fitting model
+knnMod <-knn( train  = trainTransformed[1:3], test = testTransformed[1:3], cl = trainTransformed$MadeDonation,k=5)
+summary(knnMod)
+#Predict Output 
+pred= predict(knnMod,testTransformed)
+
+confusionMatrix(knnMod, bloodTest$MadeDonation, positive = '1')
+
+accuracy <- numeric(15)
+for(i in 1:15){
+  
+  mod<- knn( train  = trainTransformed[1:3], test = testTransformed[1:3], cl = trainTransformed$MadeDonation,k=i)
+  accuracy[i] <-confusionMatrix(mod, bloodTest$MadeDonation, positive = '1')$overall[1]
+
+}
+plot(accuracy)
+which.max(accuracy)
+
+
+# Fitting model
+knnMod <-knn( train  = trainTransformed[1:3], test = testTransformed[1:3], cl = trainTransformed$MadeDonation,k=9)
+summary(knnMod)
+#Predict Output 
+
+confusionMatrix(knnMod, bloodTest$MadeDonation, positive = '1')
 
 
 library(RWeka)
